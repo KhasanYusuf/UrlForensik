@@ -25,12 +25,15 @@
             <table class="table table-hover" id="kasusTable">
                 <thead class="table-light">
                     <tr>
-                        <th width="5%">No</th>
-                        <th>Site URL</th>
-                        <th>Jenis Kasus</th>
-                        <th>Tanggal Kejadian</th>
-                        <th>Status</th>
-                        <th width="10%">Opsi</th>
+                        <th width="3%">No</th>
+                        <th width="15%">Site URL</th>
+                        <th width="12%">Jenis Kasus</th>
+                        <th width="25%">Deskripsi</th>
+                        <th width="10%">Tanggal</th>
+                        <th width="8%">Impact</th>
+                        <th width="10%">Sumber</th>
+                        <th width="8%">Status</th>
+                        <th width="9%">Opsi</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -121,26 +124,34 @@
                 @method('PUT')
                 <input type="hidden" id="edit_id_kasus" name="id_kasus">
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="edit_id_site" class="form-label">Monitored Site <span class="text-danger">*</span></label>
-                        <select class="form-select" id="edit_id_site" name="id_site" required>
-                            <option value="">-- Pilih Site --</option>
-                            @foreach($korbans as $korban)
-                                <option value="{{ $korban->id_site }}">{{ $korban->site_url }}</option>
-                            @endforeach
-                        </select>
-                        <div class="invalid-feedback"></div>
+                    <div class="alert alert-info mb-3">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Site:</strong> <span id="edit_site_url_display">-</span>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="edit_id_site" class="form-label">Monitored Site <span class="text-danger">*</span></label>
+                            <select class="form-select" id="edit_id_site" name="id_site" required>
+                                <option value="">-- Pilih Site --</option>
+                                @foreach($korbans as $korban)
+                                    <option value="{{ $korban->id_site }}">{{ $korban->site_url }}</option>
+                                @endforeach
+                            </select>
+                            <div class="invalid-feedback"></div>
+                        </div>
+
+                        <div class="col-md-6 mb-3">
+                            <label for="edit_tanggal_kejadian" class="form-label">Tanggal Kejadian <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" id="edit_tanggal_kejadian" name="tanggal_kejadian" required>
+                            <div class="invalid-feedback"></div>
+                        </div>
                     </div>
 
                     <div class="mb-3">
                         <label for="edit_jenis_kasus" class="form-label">Jenis Kasus <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="edit_jenis_kasus" name="jenis_kasus" required>
-                        <div class="invalid-feedback"></div>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="edit_tanggal_kejadian" class="form-label">Tanggal Kejadian <span class="text-danger">*</span></label>
-                        <input type="date" class="form-control" id="edit_tanggal_kejadian" name="tanggal_kejadian" required>
+                        <input type="text" class="form-control" id="edit_jenis_kasus" name="jenis_kasus" required
+                            placeholder="e.g., Defacement, Malware Injection, Unauthorized Domain Injection">
                         <div class="invalid-feedback"></div>
                     </div>
 
@@ -150,14 +161,35 @@
                         <div class="invalid-feedback"></div>
                     </div>
 
-                    <div class="mb-3">
-                        <label for="edit_status_kasus" class="form-label">Status Kasus <span class="text-danger">*</span></label>
-                        <select class="form-select" id="edit_status_kasus" name="status_kasus" required>
-                            <option value="">-- Pilih Status --</option>
-                            <option value="Open">Open</option>
-                            <option value="Closed">Closed</option>
-                        </select>
-                        <div class="invalid-feedback"></div>
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="edit_status_kasus" class="form-label">Status Kasus <span class="text-danger">*</span></label>
+                            <select class="form-select" id="edit_status_kasus" name="status_kasus" required>
+                                <option value="">-- Pilih Status --</option>
+                                <option value="Open">Open</option>
+                                <option value="Closed">Closed</option>
+                            </select>
+                            <div class="invalid-feedback"></div>
+                        </div>
+
+                        <div class="col-md-4 mb-3">
+                            <label for="edit_impact_level" class="form-label">Impact Level</label>
+                            <select class="form-select" id="edit_impact_level" name="impact_level">
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                            </select>
+                            <small class="text-muted">Tingkat dampak kasus</small>
+                        </div>
+
+                        <div class="col-md-4 mb-3">
+                            <label for="edit_detection_source" class="form-label">Sumber Deteksi</label>
+                            <select class="form-select" id="edit_detection_source" name="detection_source">
+                                <option value="Manual">Manual</option>
+                                <option value="System Monitoring">System Monitoring</option>
+                            </select>
+                            <small class="text-muted">Sumber penemuan kasus</small>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -194,7 +226,10 @@ $(document).ready(function() {
             },
             { data: 'site_url', name: 'site_url' },
             { data: 'jenis_kasus', name: 'jenis_kasus' },
+            { data: 'deskripsi_short', name: 'deskripsi_kasus' },
             { data: 'tanggal_kejadian_formatted', name: 'tanggal_kejadian' },
+            { data: 'impact_badge', name: 'impact_level' },
+            { data: 'detection_badge', name: 'detection_source' },
             { data: 'status_badge', name: 'status_kasus' },
             {
                 data: 'opsi',
@@ -203,7 +238,7 @@ $(document).ready(function() {
                 searchable: false
             }
         ],
-        order: [[0, 'desc']],
+        order: [[4, 'desc']], // Order by tanggal_kejadian
         language: {
             processing: "Memuat data...",
             search: "Pencarian:",
@@ -277,10 +312,13 @@ $(document).ready(function() {
                 if (response.success) {
                     $('#edit_id_kasus').val(response.data.id_kasus);
                     $('#edit_id_site').val(response.data.id_site);
+                    $('#edit_site_url_display').text(response.data.site_url);
                     $('#edit_jenis_kasus').val(response.data.jenis_kasus);
                     $('#edit_tanggal_kejadian').val(response.data.tanggal_kejadian);
                     $('#edit_deskripsi_kasus').val(response.data.deskripsi_kasus);
                     $('#edit_status_kasus').val(response.data.status_kasus);
+                    $('#edit_detection_source').val(response.data.detection_source);
+                    $('#edit_impact_level').val(response.data.impact_level);
                     $('#editModal').modal('show');
                 }
             },

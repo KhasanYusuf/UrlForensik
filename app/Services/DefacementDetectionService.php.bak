@@ -1,0 +1,710 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\MonitoredSite;
+use App\Models\Kasus;
+use App\Models\BuktiDigital;
+use App\Models\ActivityLog;
+use GuzzleHttp\Client;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\DomCrawler\Crawler;
+
+class DefacementDetectionService
+{
+    protected Client $client;
+
+    // Smart defaults for static selectors (layout elements that rarely change)
+    private const DEFAULT_STATIC_SELECTORS = 'nav, footer, header, .navbar, .main-header, .site-footer';
+    
+    // Auto-discovery priority order for dynamic content zones
+    private const DEFAULT_DYNAMIC_SELECTORS = ['article', 'main', '#content', '#main', '.post-content', 'body'];
+    
+    // Dangerous tags that should not appear in dynamic zones
+    private const DANGEROUS_TAGS = ['script', 'iframe', 'object', 'embed', 'applet'];
+    
+    // Bad keywords (Indonesian context)
+    private const BAD_KEYWORDS = [
+        'hacked by', 'defaced by', 'owned by', 'pwned by', 'rooted by',
+        'slot gacor', 'rtp live', 'judi online', 'poker', 'togel',
+        'your site has been hacked', 'indonesian cyber army'
+    ];
+
+    public function __construct()
+    {
+        $this->client = new Client([
+            'timeout' => 15, 
+            'verify' => false,
+            'http_errors' => false
+        ]);
+    }
+
+    /**
+     * Check a single monitored site for defacement using DOM-based content-aware detection.
+     * Smart auto-discovery when selectors are NULL.
+     *
+     * @param MonitoredSite $site
+     * @return void
+     */
+    public function checkSite(MonitoredSite $site): void
+    {
+        try {
+            $response = $this->client->get($site->site_url);
+            $body = (string) $response->getBody();
+
+            // If there is no baseline file yet, initialize it from the current body and mark UP
+            if (empty($site->baseline_file_path) || ! Storage::disk('public')->exists($site->baseline_file_path)) {
+                $baselinePath = "baselines/{$site->id_site}_baseline.html";
+                Storage::disk('public')->put($baselinePath, $body);
+                $site->baseline_file_path = $baselinePath;
+                $site->baseline_hash = hash('sha256', $body);
+                $site->last_checked_at = now();
+                $site->status = 'UP';
+                $site->save();
+                Log::info("Initialized baseline for site {$site->id_site}");
+                return;
+            }
+
+            // Load baseline content
+            $baselineContent = Storage::disk('public')->get($site->baseline_file_path);
+
+            // Helpers for DOM parsing
+            $domFor = function (string $html) {
+                $dom = new \DOMDocument();
+                libxml_use_internal_errors(true);
+                $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                libxml_clear_errors();
+                return $dom;
+            };
+
+            $getNodesHtml = function (\DOMDocument $dom, array $selectors) {
+                $xpath = new \DOMXPath($dom);
+                $htmlParts = [];
+                foreach ($selectors as $sel) {
+                    $sel = trim($sel);
+                    if ($sel === '') continue;
+                    // Support simple selectors: tag, .class, #id
+                    if (strpos($sel, '#') === 0) {
+                        $id = substr($sel, 1);
+                        $nodes = $xpath->query("//*[@id='" . addslashes($id) . "']");
+                    } elseif (strpos($sel, '.') === 0) {
+                        $class = substr($sel, 1);
+                        $nodes = $xpath->query("//*[contains(concat(' ', normalize-space(@class), ' '), ' " . addslashes($class) . " ')]");
+                    } else {
+                        // tag name
+                        $nodes = $xpath->query('//' . $sel);
+                    }
+
+                    if ($nodes instanceof \DOMNodeList) {
+                        foreach ($nodes as $node) {
+                            $inner = '';
+                            foreach ($node->childNodes as $child) {
+                                $inner .= $dom->saveHTML($child);
+                            }
+                            $htmlParts[] = trim($inner);
+                        }
+                    }
+                }
+                return implode("\n", $htmlParts);
+            };
+
+            // Parse baseline and current DOMs
+            $domBaseline = $domFor($baselineContent);
+            $domCurrent = $domFor($body);
+
+            // Read selectors from MonitoredSite (comma-separated) or apply Smart Defaults
+            // Default Static Selector if not provided
+            if (! empty($site->selector_static)) {
+                $staticSelectors = array_values(array_filter(array_map('trim', explode(',', $site->selector_static))));
+            } else {
+                // elements that rarely change structure
+                $staticSelectors = ['nav', 'header', 'footer', 'aside', '.navbar', '.footer'];
+            }
+
+            // Dynamic selectors: if user provided, use them; otherwise attempt auto-discovery
+            if (! empty($site->selector_dynamic)) {
+                $dynamicSelectors = array_values(array_filter(array_map('trim', explode(',', $site->selector_dynamic))));
+            } else {
+                // Candidate selectors in order to find the main content area
+                $candidates = ['main', 'article', '#content', '#main', '.content', 'body'];
+                $dynamicSelectors = [];
+                foreach ($candidates as $cand) {
+                    $foundHtml = $getNodesHtml($domCurrent, [$cand]);
+                    if (trim($foundHtml) !== '') {
+                        $dynamicSelectors[] = $cand;
+                        break; // use the first candidate that yields content
+                    }
+                }
+                // If none matched, fallback to 'body' but will trigger global blacklist scan if empty
+                if (empty($dynamicSelectors)) {
+                    $dynamicSelectors = ['body'];
+                }
+            }
+
+            // --- Step 1: Static Zone Integrity Check ---
+            $baselineStaticHtml = $getNodesHtml($domBaseline, $staticSelectors);
+            $currentStaticHtml = $getNodesHtml($domCurrent, $staticSelectors);
+
+            // If selectors did not find elements in baseline or current, fallback to a global blacklist scan
+            if (trim($baselineStaticHtml) === '' || trim($currentStaticHtml) === '') {
+                Log::warning("Static selectors did not match elements for site {$site->site_url} (id: {$site->id_site}). Falling back to global blacklist scan.");
+
+                // perform global blacklist scan across the whole current DOM
+                $xpathGlobal = new \DOMXPath($domCurrent);
+                $forbiddenTagsGlobal = ['script', 'object', 'embed', 'iframe', 'meta', 'style'];
+                $foundForbiddenGlobal = [];
+                foreach ($forbiddenTagsGlobal as $tag) {
+                    $nodesG = $xpathGlobal->query('//' . $tag);
+                    if ($nodesG->length > 0) $foundForbiddenGlobal[] = $tag;
+                }
+
+                $nodesWithStyleGlobal = $xpathGlobal->query('//*[@style]');
+                $suspiciousStylesGlobal = [];
+                foreach ($nodesWithStyleGlobal as $node) {
+                    $style = strtolower($node->getAttribute('style'));
+                    if (strpos($style, 'display:none') !== false) {
+                        $suspiciousStylesGlobal[] = 'display:none';
+                    }
+                    if (preg_match('/background(-image)?:.*url\(([^)]+)\)/i', $style, $m)) {
+                        $url = trim($m[2], "'\" ");
+                        $host = parse_url($url, PHP_URL_HOST);
+                        if ($host) {
+                            $suspiciousStylesGlobal[] = 'background-image:' . $host;
+                        } else {
+                            $suspiciousStylesGlobal[] = 'background-image:external';
+                        }
+                    }
+                }
+
+                $formNodesGlobal = $xpathGlobal->query('//form|//input');
+                $foundFormGlobal = ($formNodesGlobal->length > 0);
+
+                if (! empty($foundForbiddenGlobal) || ! empty($suspiciousStylesGlobal) || $foundFormGlobal) {
+                    $site->status = 'DEFACED';
+                    $site->save();
+
+                    $descParts = [];
+                    if (! empty($foundForbiddenGlobal)) $descParts[] = 'Forbidden tags found globally: ' . implode(', ', $foundForbiddenGlobal);
+                    if (! empty($suspiciousStylesGlobal)) $descParts[] = 'Suspicious global inline styles: ' . implode(', ', $suspiciousStylesGlobal);
+                    if ($foundFormGlobal) $descParts[] = 'Form/input elements detected globally';
+
+                    $kasus = Kasus::create([
+                        'id_site' => $site->id_site,
+                        'jenis_kasus' => 'Defacement',
+                        'tanggal_kejadian' => now(),
+                        'deskripsi_kasus' => 'Automatic detection (global fallback): ' . implode(' ; ', $descParts),
+                        'status_kasus' => 'Open',
+                        'detection_source' => 'System Monitoring',
+                        'impact_level' => 'High',
+                    ]);
+
+                    // Save evidence
+                    $timestamp = now()->format('Ymd_His');
+                    $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                    $htmlPath = $basePath . "global_injection_{$timestamp}.html";
+                    Storage::disk('public')->put($htmlPath, $body);
+                    $headersPath = $basePath . 'response_headers.json';
+                    $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                    Storage::disk('public')->put($headersPath, $headersJson);
+
+                    BuktiDigital::create([
+                        'id_kasus' => $kasus->id_kasus,
+                        'jenis_bukti' => 'source_html',
+                        'file_url' => $htmlPath,
+                        'created_date' => now(),
+                        'keterangan' => 'Auto-captured snapshot from global blacklist fallback',
+                    ]);
+
+                    ActivityLog::create([
+                        'user_id' => null,
+                        'action' => 'auto_detect_global_injection',
+                        'target_type' => 'monitored_site',
+                        'target_id' => $site->id_site,
+                        'case_id' => $kasus->id_kasus,
+                        'ip_address' => null,
+                        'changes' => [
+                            'found_forbidden_global' => $foundForbiddenGlobal,
+                            'suspicious_styles_global' => $suspiciousStylesGlobal,
+                            'found_form_global' => $foundFormGlobal,
+                        ],
+                    ]);
+
+                    Log::warning("Global blacklist fallback detected issues for site {$site->site_url} (id: {$site->id_site})");
+                    return;
+                }
+
+                // if global scan found nothing, continue with next checks (e.g., link hijack / legacy scans)
+            }
+
+            $baselineStaticHash = hash('sha256', $baselineStaticHtml);
+            $currentStaticHash = hash('sha256', $currentStaticHtml);
+
+            if ($baselineStaticHash !== $currentStaticHash) {
+                // Static area changed -> layout breach
+                $site->status = 'DEFACED';
+                $site->save();
+
+                $kasus = Kasus::create([
+                    'id_site' => $site->id_site,
+                    'jenis_kasus' => 'Defacement',
+                    'tanggal_kejadian' => now(),
+                    'deskripsi_kasus' => 'Automatic detection: static zone layout breach detected (static selectors changed)',
+                    'status_kasus' => 'Open',
+                    'detection_source' => 'System Monitoring',
+                    'impact_level' => 'High',
+                ]);
+
+                // Save evidence
+                $timestamp = now()->format('Ymd_His');
+                $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                $htmlPath = $basePath . "layout_breach_{$timestamp}.html";
+                Storage::disk('public')->put($htmlPath, $body);
+                $headersPath = $basePath . 'response_headers.json';
+                $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                Storage::disk('public')->put($headersPath, $headersJson);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'source_html',
+                    'file_url' => $htmlPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured snapshot for static zone layout breach',
+                ]);
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'response_headers',
+                    'file_url' => $headersPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured response headers',
+                ]);
+
+                if (! empty($site->baseline_file_path) && Storage::disk('public')->exists($site->baseline_file_path)) {
+                    BuktiDigital::create([
+                        'id_kasus' => $kasus->id_kasus,
+                        'jenis_bukti' => 'baseline_html',
+                        'file_url' => $site->baseline_file_path,
+                        'created_date' => now(),
+                        'keterangan' => 'Existing baseline from monitored site',
+                    ]);
+                }
+
+                ActivityLog::create([
+                    'user_id' => null,
+                    'action' => 'auto_detect_layout_breach',
+                    'target_type' => 'monitored_site',
+                    'target_id' => $site->id_site,
+                    'case_id' => $kasus->id_kasus,
+                    'ip_address' => null,
+                    'changes' => [
+                        'baseline_static_hash' => $baselineStaticHash,
+                        'current_static_hash' => $currentStaticHash,
+                    ],
+                ]);
+
+                Log::warning("Static zone layout breach detected for site {$site->site_url} (id: {$site->id_site})");
+                return;
+            }
+
+            // --- Step 2: Dynamic Zone Safety Check ---
+            $baselineDynamicHtml = $getNodesHtml($domBaseline, $dynamicSelectors);
+            $currentDynamicHtml = $getNodesHtml($domCurrent, $dynamicSelectors);
+
+            // Create DOM fragments for dynamic areas to allow searching for tags
+            $domBaselineDynamic = $domFor($baselineDynamicHtml ?: '<div></div>');
+            $domCurrentDynamic = $domFor($currentDynamicHtml ?: '<div></div>');
+            $xpathCurrentDynamic = new \DOMXPath($domCurrentDynamic);
+
+            // Forbidden tags inside dynamic zone
+            $forbiddenTags = ['script', 'object', 'embed', 'iframe', 'meta'];
+            $foundForbidden = [];
+            foreach ($forbiddenTags as $tag) {
+                $nodes = $xpathCurrentDynamic->query('//' . $tag);
+                if ($nodes->length > 0) $foundForbidden[] = $tag;
+            }
+
+            // Style injection: <style> tags or suspicious style attributes
+            $styleNodes = $xpathCurrentDynamic->query('//style');
+            if ($styleNodes->length > 0) $foundForbidden[] = 'style_tag';
+
+            // Check inline style attributes for suspicious patterns
+            $nodesWithStyle = $xpathCurrentDynamic->query('//*[@style]');
+            $suspiciousStyles = [];
+            foreach ($nodesWithStyle as $node) {
+                $style = strtolower($node->getAttribute('style'));
+                if (strpos($style, 'display:none') !== false) {
+                    $suspiciousStyles[] = 'display:none';
+                }
+                if (preg_match('/background(-image)?:.*url\(([^)]+)\)/i', $style, $m)) {
+                    $url = trim($m[2], "'\" ");
+                    $host = parse_url($url, PHP_URL_HOST);
+                    if ($host) {
+                        $suspiciousStyles[] = 'background-image:' . $host;
+                    } else {
+                        $suspiciousStyles[] = 'background-image:external';
+                    }
+                }
+            }
+
+            // Forms/inputs in dynamic area
+            $formNodes = $xpathCurrentDynamic->query('//form|//input');
+            $foundForm = ($formNodes->length > 0);
+
+            if (! empty($foundForbidden) || ! empty($suspiciousStyles) || $foundForm) {
+                $site->status = 'DEFACED';
+                $site->save();
+
+                $descParts = [];
+                if (! empty($foundForbidden)) $descParts[] = 'Forbidden tags in dynamic zone: ' . implode(', ', $foundForbidden);
+                if (! empty($suspiciousStyles)) $descParts[] = 'Suspicious inline styles: ' . implode(', ', $suspiciousStyles);
+                if ($foundForm) $descParts[] = 'Form/input elements detected in dynamic zone';
+
+                $kasus = Kasus::create([
+                    'id_site' => $site->id_site,
+                    'jenis_kasus' => 'Defacement',
+                    'tanggal_kejadian' => now(),
+                    'deskripsi_kasus' => 'Automatic detection: ' . implode(' ; ', $descParts),
+                    'status_kasus' => 'Open',
+                    'detection_source' => 'System Monitoring',
+                    'impact_level' => 'High',
+                ]);
+
+                // Save evidence
+                $timestamp = now()->format('Ymd_His');
+                $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                $htmlPath = $basePath . "injection_{$timestamp}.html";
+                Storage::disk('public')->put($htmlPath, $body);
+                $headersPath = $basePath . 'response_headers.json';
+                $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                Storage::disk('public')->put($headersPath, $headersJson);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'source_html',
+                    'file_url' => $htmlPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured snapshot for dynamic zone injection',
+                ]);
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'response_headers',
+                    'file_url' => $headersPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured response headers',
+                ]);
+
+                ActivityLog::create([
+                    'user_id' => null,
+                    'action' => 'auto_detect_dynamic_injection',
+                    'target_type' => 'monitored_site',
+                    'target_id' => $site->id_site,
+                    'case_id' => $kasus->id_kasus,
+                    'ip_address' => null,
+                    'changes' => [
+                        'found_forbidden' => $foundForbidden,
+                        'suspicious_styles' => $suspiciousStyles,
+                        'found_form' => $foundForm,
+                    ],
+                ]);
+
+                Log::warning("Dynamic zone injection detected for site {$site->site_url} (id: {$site->id_site})");
+                return;
+            }
+
+            // --- Step 3: Button/Link Hijacking Detection ---
+            $xpathCurrent = new \DOMXPath($domCurrent);
+            $anchorNodes = $xpathCurrent->query('//a[@href]');
+
+            // Allowed/whitelist domains from DB (may be stored as array or json)
+            $allowed = [];
+            if (! empty($site->allowed_domains)) {
+                if (is_array($site->allowed_domains)) {
+                    $allowed = $site->allowed_domains;
+                } else {
+                    $decoded = json_decode($site->allowed_domains, true);
+                    if (is_array($decoded)) $allowed = $decoded;
+                }
+            }
+            $allowed = array_map('strtolower', $allowed);
+
+            $suspectAnchors = [];
+            foreach ($anchorNodes as $a) {
+                // Only consider anchors within dynamic selectors
+                $parent = $a;
+                $foundInDynamic = false;
+                while ($parent && $parent->nodeType === XML_ELEMENT_NODE) {
+                    foreach ($dynamicSelectors as $sel) {
+                        if (strpos($sel, '#') === 0 && $parent->hasAttribute('id') && $parent->getAttribute('id') === substr($sel,1)) {
+                            $foundInDynamic = true; break 2;
+                        }
+                        if (strpos($sel, '.') === 0 && $parent->hasAttribute('class') && strpos(' '. $parent->getAttribute('class') .' ', ' '. substr($sel,1) .' ') !== false) {
+                            $foundInDynamic = true; break 2;
+                        }
+                        if ($parent->nodeName === $sel) { $foundInDynamic = true; break 2; }
+                    }
+                    $parent = $parent->parentNode;
+                }
+                if (! $foundInDynamic) continue;
+
+                $href = $a->getAttribute('href');
+                $host = parse_url($href, PHP_URL_HOST);
+                $classes = strtolower($a->getAttribute('class') ?? '');
+                // consider as button-like if class contains 'btn' or 'button'
+                if ($host && preg_match('/\b(btn|button|btn-)/', $classes)) {
+                    $hostLower = strtolower($host);
+                    if (! in_array($hostLower, $allowed) && $hostLower !== parse_url($site->site_url, PHP_URL_HOST)) {
+                        $suspectAnchors[] = $href;
+                    }
+                }
+            }
+
+            if (! empty($suspectAnchors)) {
+                $site->status = 'SUSPECT';
+                $site->save();
+
+                $kasus = Kasus::create([
+                    'id_site' => $site->id_site,
+                    'jenis_kasus' => 'Suspect Defacement',
+                    'tanggal_kejadian' => now(),
+                    'deskripsi_kasus' => 'Automatic detection: suspected button/link hijacking to external domains: ' . implode(', ', $suspectAnchors),
+                    'status_kasus' => 'Open',
+                    'detection_source' => 'System Monitoring',
+                    'impact_level' => 'Medium',
+                ]);
+
+                // Save snapshot and evidence
+                $timestamp = now()->format('Ymd_His');
+                $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                $htmlPath = $basePath . "suspect_link_{$timestamp}.html";
+                Storage::disk('public')->put($htmlPath, $body);
+                $headersPath = $basePath . 'response_headers.json';
+                $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                Storage::disk('public')->put($headersPath, $headersJson);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'source_html',
+                    'file_url' => $htmlPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured snapshot for suspect external links/buttons',
+                ]);
+
+                ActivityLog::create([
+                    'user_id' => null,
+                    'action' => 'auto_detect_link_hijack',
+                    'target_type' => 'monitored_site',
+                    'target_id' => $site->id_site,
+                    'case_id' => $kasus->id_kasus,
+                    'ip_address' => null,
+                    'changes' => [
+                        'suspect_anchors' => $suspectAnchors,
+                    ],
+                ]);
+
+                Log::warning("Suspect link/button hijack detected for site {$site->site_url} (id: {$site->id_site})");
+                return;
+            }
+
+            // --- Step 4: Keyword & Malware Scan (legacy checks preserved) ---
+            // Extract domains from src attributes in current content (script and iframe)
+            $srcPattern = '/<(?:script|iframe)\\b[^>]*\\ssrc=["\']([^"\']+)["\'][^>]*>/i';
+            preg_match_all($srcPattern, $body, $srcMatches);
+            $currentDomains = [];
+            foreach ($srcMatches[1] ?? [] as $src) {
+                $host = parse_url($src, PHP_URL_HOST);
+                if ($host) {
+                    $currentDomains[] = strtolower($host);
+                }
+            }
+            $currentDomains = array_values(array_unique($currentDomains));
+
+            // Allowed/whitelist domains already resolved above as $allowed
+            $unknownDomains = array_values(array_diff($currentDomains, $allowed));
+
+            // Count script and iframe tags in current content
+            $scriptPattern = '#<script\\b[^>]*>(.*?)</script>#is';
+            $iframePattern = '#<iframe\\b[^>]*>(.*?)</iframe>#is';
+            preg_match_all($scriptPattern, $body, $scriptMatches);
+            preg_match_all($iframePattern, $body, $iframeMatches);
+            $currentScriptCount = count($scriptMatches[0] ?? []) + count($iframeMatches[0] ?? []);
+
+            // Keyword scan inside script contents (case-insensitive)
+            $dangerKeywords = [
+                'eval(base64_decode',
+                'coin-hive',
+                'document.write(unescape',
+            ];
+            $foundKeywords = [];
+            foreach ($scriptMatches[1] ?? [] as $scriptContent) {
+                $lower = strtolower($scriptContent);
+                foreach ($dangerKeywords as $kw) {
+                    if (strpos($lower, $kw) !== false) {
+                        $foundKeywords[] = $kw;
+                    }
+                }
+            }
+            $foundKeywords = array_values(array_unique($foundKeywords));
+
+            // Bad Keyword Scanner (local Indonesian keywords)
+            $badKeywords = [
+                'Hacked by',
+                'Pwned',
+                'Slot Gacor',
+                'RTP Live',
+                'Judi Online',
+                'Poker',
+                'Togel',
+            ];
+            $foundBadKeywords = [];
+            $lowerBody = strtolower($body);
+            foreach ($badKeywords as $bk) {
+                if (strpos($lowerBody, strtolower($bk)) !== false) {
+                    $foundBadKeywords[] = $bk;
+                }
+            }
+            $foundBadKeywords = array_values(array_unique($foundBadKeywords));
+
+            if (! empty($foundBadKeywords)) {
+                $site->status = 'SUSPECT';
+                $site->save();
+
+                $kasus = Kasus::create([
+                    'id_site' => $site->id_site,
+                    'jenis_kasus' => 'Suspect Defacement',
+                    'tanggal_kejadian' => now(),
+                    'deskripsi_kasus' => 'Automatic detection: suspicious keywords found: ' . implode(', ', $foundBadKeywords),
+                    'status_kasus' => 'Open',
+                    'detection_source' => 'System Monitoring',
+                    'impact_level' => 'Medium',
+                ]);
+
+                // save evidence snapshot
+                $timestamp = now()->format('Ymd_His');
+                $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                $htmlPath = $basePath . "suspect_{$timestamp}.html";
+                Storage::disk('public')->put($htmlPath, $body);
+                $headersPath = $basePath . 'response_headers.json';
+                $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                Storage::disk('public')->put($headersPath, $headersJson);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'source_html',
+                    'file_url' => $htmlPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured snapshot for suspect keyword detection',
+                ]);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'response_headers',
+                    'file_url' => $headersPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured response headers',
+                ]);
+
+                ActivityLog::create([
+                    'user_id' => null,
+                    'action' => 'auto_detect_bad_keyword',
+                    'target_type' => 'monitored_site',
+                    'target_id' => $site->id_site,
+                    'case_id' => $kasus->id_kasus,
+                    'ip_address' => null,
+                    'changes' => [
+                        'found_bad_keywords' => $foundBadKeywords,
+                    ],
+                ]);
+
+                Log::warning("Suspect defacement keywords detected for site {$site->site_url} (id: {$site->id_site}) - " . implode(',', $foundBadKeywords));
+
+                return;
+            }
+
+            // If unknown domains or dangerous keywords found -> mark as Malware Injection incident
+            if (! empty($unknownDomains) || ! empty($foundKeywords)) {
+                $site->status = 'DEFACED';
+                $site->save();
+
+                $kasus = Kasus::create([
+                    'id_site' => $site->id_site,
+                    'jenis_kasus' => 'Malware Injection',
+                    'tanggal_kejadian' => now(),
+                    'deskripsi_kasus' => 'Automatic detection: ' . (
+                        ! empty($unknownDomains) ? 'Detected unknown domain(s): ' . implode(', ', $unknownDomains) : ''
+                    ) . (! empty($foundKeywords) ? ' Detected suspicious script patterns: ' . implode(', ', $foundKeywords) : ''),
+                    'status_kasus' => 'Open',
+                    'detection_source' => 'System Monitoring',
+                    'impact_level' => 'High',
+                ]);
+
+                // Save snapshot and headers as evidence
+                $timestamp = now()->format('Ymd_His');
+                $basePath = "bukti_digital/monitored_site_{$site->id_site}/" . $timestamp . '/';
+                $htmlPath = $basePath . "malware_{$timestamp}.html";
+                Storage::disk('public')->put($htmlPath, $body);
+                $headersPath = $basePath . 'response_headers.json';
+                $headersJson = json_encode($response->getHeaders(), JSON_PRETTY_PRINT);
+                Storage::disk('public')->put($headersPath, $headersJson);
+
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'source_html',
+                    'file_url' => $htmlPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured snapshot for malware detection',
+                ]);
+                BuktiDigital::create([
+                    'id_kasus' => $kasus->id_kasus,
+                    'jenis_bukti' => 'response_headers',
+                    'file_url' => $headersPath,
+                    'created_date' => now(),
+                    'keterangan' => 'Auto-captured response headers',
+                ]);
+
+                // Include baseline as evidence if available
+                if (! empty($site->baseline_file_path) && Storage::disk('public')->exists($site->baseline_file_path)) {
+                    BuktiDigital::create([
+                        'id_kasus' => $kasus->id_kasus,
+                        'jenis_bukti' => 'baseline_html',
+                        'file_url' => $site->baseline_file_path,
+                        'created_date' => now(),
+                        'keterangan' => 'Existing baseline from monitored site',
+                    ]);
+                }
+
+                ActivityLog::create([
+                    'user_id' => null,
+                    'action' => 'auto_detect_malware',
+                    'target_type' => 'monitored_site',
+                    'target_id' => $site->id_site,
+                    'case_id' => $kasus->id_kasus,
+                    'ip_address' => null,
+                    'changes' => [
+                        'unknown_domains' => $unknownDomains,
+                        'found_keywords' => $foundKeywords,
+                    ],
+                ]);
+
+                Log::warning("Malware injection detected for site {$site->site_url} (id: {$site->id_site}) - unknown domains: " . implode(',', $unknownDomains));
+
+                return;
+            }
+
+            // If everything passed -> mark UP and update baseline for safe drift
+            $site->status = 'UP';
+            $site->last_checked_at = now();
+            try {
+                Storage::disk('public')->put($site->baseline_file_path, $body);
+                $site->baseline_hash = $currentHash;
+            } catch (\Exception $e) {
+                Log::error('Failed to update baseline file for site ' . $site->id_site . ': ' . $e->getMessage());
+            }
+            $site->save();
+        } catch (\Exception $e) {
+            Log::error('Error checking site ' . $site->site_url . ': ' . $e->getMessage());
+            // Optionally, mark as DOWN if connection issues occur
+            $site->status = 'DOWN'; $site->save();
+        }
+    }
+}
+

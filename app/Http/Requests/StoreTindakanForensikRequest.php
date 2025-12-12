@@ -25,7 +25,6 @@ class StoreTindakanForensikRequest extends FormRequest
             'id_kasus' => 'required|exists:kasus,id_kasus',
             'jenis_tindakan' => 'required|string|in:Analysis,Recovery,Preservation',
             'waktu_pelaksanaan' => 'required|date',
-            'lokasi_tindakan' => 'nullable|string|max:255',
             'metode_forensik' => 'required|string|max:255',
             'hasil_tindakan' => 'required|string',
             'petugas_forensik' => 'required|string|max:255',

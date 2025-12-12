@@ -28,11 +28,13 @@
                         <th width="5%">No</th>
                         <th>Monitored Site</th>
                         <th>Jenis Kasus</th>
-                        <th>Jenis Tindakan</th>
-                        <th>Waktu Pelaksanaan</th>
+                        <th>Entry Point</th>
+                        <th>Attacker IP</th>
+                        <th>Webshell</th>
+                        <th>Waktu</th>
                         <th>Petugas</th>
                         <th>Status</th>
-                        <th width="10%">Opsi</th>
+                        <th width="8%">Opsi</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -72,57 +74,76 @@
                             </div>
 
                             <div class="mb-3">
-                                <label for="create_jenis_tindakan" class="form-label">Jenis Tindakan <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="create_jenis_tindakan" name="jenis_tindakan" placeholder="Contoh: Analisis Perangkat, Pengambilan Data" required>
+                                <label for="create_entry_point" class="form-label">Entry Point <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="create_entry_point" name="entry_point" placeholder="e.g., /uploads/backdoor.php, vulnerable plugin" required>
+                                <div class="form-text">Titik masuk yang digunakan attacker</div>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="create_waktu_pelaksanaan" class="form-label">Waktu Pelaksanaan <span class="text-danger">*</span></label>
-                                <input type="datetime-local" class="form-control" id="create_waktu_pelaksanaan" name="waktu_pelaksanaan" required>
+                                <label for="create_attacker_ip" class="form-label">Attacker IP</label>
+                                <input type="text" class="form-control" id="create_attacker_ip" name="attacker_ip" placeholder="e.g., 192.168.1.100">
+                                <div class="form-text">IP address attacker (opsional)</div>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="create_lokasi_tindakan" class="form-label">Lokasi Tindakan <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="create_lokasi_tindakan" name="lokasi_tindakan" placeholder="Contoh: Lab Forensik Jakarta" required>
+                                <label for="create_jenis_webshell" class="form-label">Jenis Webshell / Malware</label>
+                                <input type="text" class="form-control" id="create_jenis_webshell" name="jenis_webshell" placeholder="e.g., c99 shell, r57 shell">
+                                <div class="form-text">Jenis webshell yang ditemukan (opsional)</div>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
                                 <label for="create_petugas_forensik" class="form-label">Petugas Forensik <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="create_petugas_forensik" name="petugas_forensik" placeholder="Nama petugas yang bertanggung jawab" required>
+                                <input type="text" class="form-control" id="create_petugas_forensik" name="petugas_forensik" value="{{ auth()->user()?->name ?? '' }}" required>
                                 <div class="invalid-feedback"></div>
                             </div>
                         </div>
 
                         <div class="col-md-6">
                             <div class="mb-3">
-                                <label for="create_metode_forensik" class="form-label">Metode Forensik <span class="text-danger">*</span></label>
-                                <textarea class="form-control" id="create_metode_forensik" name="metode_forensik" rows="4" placeholder="Jelaskan metode dan teknik forensik yang digunakan" required></textarea>
+                                <label for="create_jenis_tindakan" class="form-label">Jenis Tindakan <span class="text-danger">*</span></label>
+                                <select class="form-select" id="create_jenis_tindakan" name="jenis_tindakan" required>
+                                    <option value="Analysis" selected>Analysis</option>
+                                    <option value="Recovery">Recovery</option>
+                                    <option value="Preservation">Preservation</option>
+                                    <option value="Investigation">Investigation</option>
+                                </select>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="create_hasil_tindakan" class="form-label">Hasil Tindakan</label>
-                                <textarea class="form-control" id="create_hasil_tindakan" name="hasil_tindakan" rows="3" placeholder="Hasil atau temuan dari tindakan forensik"></textarea>
+                                <label for="create_waktu_pelaksanaan" class="form-label">Waktu Pelaksanaan <span class="text-danger">*</span></label>
+                                <input type="datetime-local" class="form-control" id="create_waktu_pelaksanaan" name="waktu_pelaksanaan" value="{{ now()->format('Y-m-d\\TH:i') }}" required>
+                                <div class="invalid-feedback"></div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="create_metode_forensik" class="form-label">Metode Forensik</label>
+                                <input type="text" class="form-control" id="create_metode_forensik" name="metode_forensik" placeholder="Manual Analysis, Automated Scan, etc." value="Manual Analysis">
+                                <div class="invalid-feedback"></div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="create_hasil_tindakan" class="form-label">Hasil Analisis</label>
+                                <textarea class="form-control" id="create_hasil_tindakan" name="hasil_tindakan" rows="4" placeholder="Hasil temuan dan analisis forensik"></textarea>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
                                 <label for="create_status_tindakan" class="form-label">Status <span class="text-danger">*</span></label>
                                 <select class="form-select" id="create_status_tindakan" name="status_tindakan" required>
-                                    <option value="">-- Pilih Status --</option>
-                                    <option value="Planned">Planned</option>
+                                    <option value="Completed" selected>Completed</option>
                                     <option value="In Progress">In Progress</option>
-                                    <option value="Completed">Completed</option>
+                                    <option value="Planned">Planned</option>
                                 </select>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="create_catatan" class="form-label">Catatan</label>
-                                <textarea class="form-control" id="create_catatan" name="catatan" rows="3" placeholder="Catatan tambahan (opsional)"></textarea>
+                                <label for="create_catatan" class="form-label">Catatan Tambahan</label>
+                                <textarea class="form-control" id="create_catatan" name="catatan" rows="2" placeholder="Catatan tambahan (opsional)"></textarea>
                                 <div class="invalid-feedback"></div>
                             </div>
                         </div>
@@ -172,20 +193,20 @@
                             </div>
 
                             <div class="mb-3">
-                                <label for="edit_jenis_tindakan" class="form-label">Jenis Tindakan <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="edit_jenis_tindakan" name="jenis_tindakan" required>
+                                <label for="edit_entry_point" class="form-label">Entry Point <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="edit_entry_point" name="entry_point" required>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="edit_waktu_pelaksanaan" class="form-label">Waktu Pelaksanaan <span class="text-danger">*</span></label>
-                                <input type="datetime-local" class="form-control" id="edit_waktu_pelaksanaan" name="waktu_pelaksanaan" required>
+                                <label for="edit_attacker_ip" class="form-label">Attacker IP</label>
+                                <input type="text" class="form-control" id="edit_attacker_ip" name="attacker_ip">
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="edit_lokasi_tindakan" class="form-label">Lokasi Tindakan <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="edit_lokasi_tindakan" name="lokasi_tindakan" required>
+                                <label for="edit_jenis_webshell" class="form-label">Jenis Webshell / Malware</label>
+                                <input type="text" class="form-control" id="edit_jenis_webshell" name="jenis_webshell">
                                 <div class="invalid-feedback"></div>
                             </div>
 
@@ -198,13 +219,30 @@
 
                         <div class="col-md-6">
                             <div class="mb-3">
-                                <label for="edit_metode_forensik" class="form-label">Metode Forensik <span class="text-danger">*</span></label>
-                                <textarea class="form-control" id="edit_metode_forensik" name="metode_forensik" rows="4" required></textarea>
+                                <label for="edit_jenis_tindakan" class="form-label">Jenis Tindakan <span class="text-danger">*</span></label>
+                                <select class="form-select" id="edit_jenis_tindakan" name="jenis_tindakan" required>
+                                    <option value="Analysis">Analysis</option>
+                                    <option value="Recovery">Recovery</option>
+                                    <option value="Preservation">Preservation</option>
+                                    <option value="Investigation">Investigation</option>
+                                </select>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="edit_hasil_tindakan" class="form-label">Hasil Tindakan</label>
+                                <label for="edit_waktu_pelaksanaan" class="form-label">Waktu Pelaksanaan <span class="text-danger">*</span></label>
+                                <input type="datetime-local" class="form-control" id="edit_waktu_pelaksanaan" name="waktu_pelaksanaan" required>
+                                <div class="invalid-feedback"></div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="edit_metode_forensik" class="form-label">Metode Forensik</label>
+                                <input type="text" class="form-control" id="edit_metode_forensik" name="metode_forensik">
+                                <div class="invalid-feedback"></div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="edit_hasil_tindakan" class="form-label">Hasil Analisis</label>
                                 <textarea class="form-control" id="edit_hasil_tindakan" name="hasil_tindakan" rows="3"></textarea>
                                 <div class="invalid-feedback"></div>
                             </div>
@@ -212,17 +250,16 @@
                             <div class="mb-3">
                                 <label for="edit_status_tindakan" class="form-label">Status <span class="text-danger">*</span></label>
                                 <select class="form-select" id="edit_status_tindakan" name="status_tindakan" required>
-                                    <option value="">-- Pilih Status --</option>
-                                    <option value="Planned">Planned</option>
-                                    <option value="In Progress">In Progress</option>
                                     <option value="Completed">Completed</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Planned">Planned</option>
                                 </select>
                                 <div class="invalid-feedback"></div>
                             </div>
 
                             <div class="mb-3">
-                                <label for="edit_catatan" class="form-label">Catatan</label>
-                                <textarea class="form-control" id="edit_catatan" name="catatan" rows="3"></textarea>
+                                <label for="edit_catatan" class="form-label">Catatan Tambahan</label>
+                                <textarea class="form-control" id="edit_catatan" name="catatan" rows="2"></textarea>
                                 <div class="invalid-feedback"></div>
                             </div>
                         </div>
@@ -262,7 +299,9 @@ $(document).ready(function() {
             },
             { data: 'site_url', name: 'site_url' },
             { data: 'nama_kasus', name: 'nama_kasus' },
-            { data: 'jenis_tindakan', name: 'jenis_tindakan' },
+            { data: 'entry_point_short', name: 'entry_point' },
+            { data: 'attacker_ip_display', name: 'attacker_ip' },
+            { data: 'webshell_badge', name: 'jenis_webshell' },
             { data: 'waktu_formatted', name: 'waktu_pelaksanaan' },
             { data: 'petugas_forensik', name: 'petugas_forensik' },
             { data: 'status_badge', name: 'status_tindakan' },
@@ -349,8 +388,10 @@ $(document).ready(function() {
                     $('#edit_id_kasus').val(response.data.id_kasus);
                     $('#edit_jenis_tindakan').val(response.data.jenis_tindakan);
                     $('#edit_waktu_pelaksanaan').val(response.data.waktu_pelaksanaan);
-                    $('#edit_lokasi_tindakan').val(response.data.lokasi_tindakan);
                     $('#edit_metode_forensik').val(response.data.metode_forensik);
+                    $('#edit_entry_point').val(response.data.entry_point);
+                    $('#edit_attacker_ip').val(response.data.attacker_ip);
+                    $('#edit_jenis_webshell').val(response.data.jenis_webshell);
                     $('#edit_hasil_tindakan').val(response.data.hasil_tindakan);
                     $('#edit_petugas_forensik').val(response.data.petugas_forensik);
                     $('#edit_status_tindakan').val(response.data.status_tindakan);

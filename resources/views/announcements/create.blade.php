@@ -9,12 +9,12 @@
 
             <div class="field">
                 <label>Title</label>
-                <input type="text" name="title" />
+                <input type="text" name="title" @required(true)/>
             </div>
 
             <div class="field">
                 <label>Content (HTML allowed)</label>
-                <textarea name="content" rows="8"></textarea>
+                <textarea name="content" rows="8" @required(true)></textarea>
             </div>
 
             <div>

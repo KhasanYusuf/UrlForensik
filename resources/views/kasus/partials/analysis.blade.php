@@ -99,61 +99,37 @@
 </div>
 
 <div id="analysis-form" class="mt-3">
-    <h5>Tambahkan Tindakan Forensik (Analysis)</h5>
-    <form id="analysisForm" method="POST" action="{{ route('tindakan_forensik.store') }}">
+    <h5>Tambahkan Analisis Forensik</h5>
+    <form id="analysisForm" method="POST" action="{{ route('kasus.analysis.store', ['id' => $kasus->id_kasus]) }}">
         @csrf
-        <input type="hidden" name="id_kasus" value="{{ $kasus->id_kasus }}">
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <label for="jenis_tindakan" class="form-label">Jenis Tindakan</label>
-                <select name="jenis_tindakan" id="jenis_tindakan" class="form-select">
-                    <option value="Analysis" selected>Analysis</option>
-                    <option value="Recovery">Recovery</option>
-                    <option value="Preservation">Preservation</option>
-                </select>
-            </div>
-            <div class="col-md-6 mb-3">
-                <label for="waktu_pelaksanaan" class="form-label">Waktu Pelaksanaan</label>
-                <input type="datetime-local" name="waktu_pelaksanaan" id="waktu_pelaksanaan" class="form-control" value="{{ now()->format('Y-m-d\TH:i') }}">
-            </div>
+
+        <div class="mb-3">
+            <label for="entry_point" class="form-label">Entry Point <span class="text-danger">*</span></label>
+            <input type="text" name="entry_point" id="entry_point" class="form-control" placeholder="e.g., /uploads/backdoor.php, vulnerable plugin, etc." required>
+            <div class="form-text">Titik masuk yang digunakan attacker untuk melakukan defacement</div>
         </div>
 
         <div class="mb-3">
-            <label for="lokasi_tindakan" class="form-label">Lokasi Tindakan</label>
-            <input type="text" name="lokasi_tindakan" id="lokasi_tindakan" class="form-control" placeholder="Lokasi tindakan (opsional)">
+            <label for="attacker_ip" class="form-label">Attacker IP Address</label>
+            <input type="text" name="attacker_ip" id="attacker_ip" class="form-control" placeholder="e.g., 192.168.1.100">
+            <div class="form-text">IP address yang terdeteksi melakukan serangan (opsional)</div>
         </div>
 
         <div class="mb-3">
-            <label for="metode_forensik" class="form-label">Metode Forensik</label>
-            <input type="text" name="metode_forensik" id="metode_forensik" class="form-control" placeholder="Metode yang digunakan">
+            <label for="jenis_webshell" class="form-label">Jenis Webshell / Malware</label>
+            <input type="text" name="jenis_webshell" id="jenis_webshell" class="form-control" placeholder="e.g., c99 shell, r57 shell, custom backdoor">
+            <div class="form-text">Jenis webshell atau malware yang ditemukan (opsional)</div>
         </div>
 
         <div class="mb-3">
-            <label for="hasil_tindakan" class="form-label">Hasil</label>
-            <textarea name="hasil_tindakan" id="hasil_tindakan" rows="6" class="form-control" placeholder="Tuliskan hasil analisis..."></textarea>
+            <label for="notes" class="form-label">Catatan Analisis</label>
+            <textarea name="notes" id="notes" rows="6" class="form-control" placeholder="Tuliskan hasil analisis, temuan penting, rekomendasi, dll..."></textarea>
+            <div class="form-text">Catatan tambahan hasil analisis forensik</div>
         </div>
 
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <label for="petugas_forensik" class="form-label">Petugas Forensik</label>
-                <input type="text" name="petugas_forensik" id="petugas_forensik" class="form-control" value="{{ auth()->user()?->name ?? '' }}">
-            </div>
-            <div class="col-md-6 mb-3">
-                <label for="status_tindakan" class="form-label">Status Tindakan</label>
-                <select name="status_tindakan" id="status_tindakan" class="form-select">
-                    <option value="Planned">Planned</option>
-                    <option value="InProgress">In Progress</option>
-                    <option value="Completed" selected>Completed</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="mb-3">
-            <label for="catatan" class="form-label">Catatan</label>
-            <textarea name="catatan" id="catatan" rows="3" class="form-control" placeholder="Catatan tambahan (opsional)"></textarea>
-        </div>
-
-        <button type="submit" class="btn btn-primary">Simpan Tindakan</button>
+        <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save me-2"></i>Simpan Analisis
+        </button>
     </form>
 </div>
 

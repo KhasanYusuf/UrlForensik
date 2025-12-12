@@ -40,8 +40,16 @@ class TindakanForensikController extends Controller
                 ->addColumn('site_url', function ($row) {
                     return $row->kasus->korban->site_url ?? '-';
                 })
-                ->addColumn('nama_korban', function ($row) {
-                    return $row->kasus->korban->nama_korban ?? ($row->kasus->korban->site_url ?? '-');
+                ->addColumn('entry_point_short', function ($row) {
+                    return $row->entry_point ? Str::limit($row->entry_point, 50) : '<span class="text-muted">-</span>';
+                })
+                ->addColumn('attacker_ip_display', function ($row) {
+                    return $row->attacker_ip ? '<code>' . $row->attacker_ip . '</code>' : '<span class="text-muted">-</span>';
+                })
+                ->addColumn('webshell_badge', function ($row) {
+                    return $row->jenis_webshell
+                        ? '<span class="badge bg-danger">' . Str::limit($row->jenis_webshell, 20) . '</span>'
+                        : '<span class="text-muted">-</span>';
                 })
                 ->addColumn('waktu_formatted', function ($row) {
                     return $row->waktu_pelaksanaan->format('d-m-Y H:i');
@@ -70,7 +78,7 @@ class TindakanForensikController extends Controller
                     </div>';
                     return $btn;
                 })
-                ->rawColumns(['status_badge', 'opsi'])
+                ->rawColumns(['entry_point_short', 'attacker_ip_display', 'webshell_badge', 'status_badge', 'opsi'])
                 ->make(true);
         }
     }
@@ -110,8 +118,10 @@ class TindakanForensikController extends Controller
                     'id_kasus' => $tindakan->id_kasus,
                     'jenis_tindakan' => $tindakan->jenis_tindakan,
                     'waktu_pelaksanaan' => $tindakan->waktu_pelaksanaan->format('Y-m-d\TH:i'),
-                    'lokasi_tindakan' => $tindakan->lokasi_tindakan,
                     'metode_forensik' => $tindakan->metode_forensik,
+                    'entry_point' => $tindakan->entry_point,
+                    'attacker_ip' => $tindakan->attacker_ip,
+                    'jenis_webshell' => $tindakan->jenis_webshell,
                     'hasil_tindakan' => $tindakan->hasil_tindakan,
                     'petugas_forensik' => $tindakan->petugas_forensik,
                     'status_tindakan' => $tindakan->status_tindakan,
@@ -196,7 +206,6 @@ class TindakanForensikController extends Controller
                 'id_kasus' => $kasus->id_kasus,
                 'jenis_tindakan' => 'Analysis',
                 'waktu_pelaksanaan' => now(),
-                'lokasi_tindakan' => $kasus->korban->site_url ?? null,
                 'metode_forensik' => 'Manual Analysis',
                 'hasil_tindakan' => json_encode($hasil),
                 'petugas_forensik' => $investigator,

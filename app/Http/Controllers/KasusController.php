@@ -43,12 +43,32 @@ class KasusController extends Controller
                     return $row->korban->site_url ?? '-';
                 })
                 ->addColumn('tanggal_kejadian_formatted', function ($row) {
-                    return $row->tanggal_kejadian->format('d-m-Y');
+                    return $row->tanggal_kejadian->format('d M Y');
+                })
+                ->addColumn('deskripsi_short', function ($row) {
+                    $desc = $row->deskripsi_kasus;
+                    return strlen($desc) > 80 ? substr($desc, 0, 80) . '...' : $desc;
+                })
+                ->addColumn('impact_badge', function ($row) {
+                    $impact = $row->impact_level ?? 'Low';
+                    $colors = [
+                        'High' => 'danger',
+                        'Medium' => 'warning',
+                        'Low' => 'info'
+                    ];
+                    $color = $colors[$impact] ?? 'secondary';
+                    return '<span class="badge bg-' . $color . '">' . $impact . '</span>';
+                })
+                ->addColumn('detection_badge', function ($row) {
+                    $source = $row->detection_source ?? 'Manual';
+                    $icon = $source === 'System Monitoring' ? 'fa-robot' : 'fa-user';
+                    $color = $source === 'System Monitoring' ? 'primary' : 'secondary';
+                    return '<span class="badge bg-' . $color . '"><i class="fas ' . $icon . ' me-1"></i>' . $source . '</span>';
                 })
                 ->addColumn('status_badge', function ($row) {
                     $badge = $row->status_kasus == 'Open'
-                        ? '<span class="badge bg-warning text-dark">Open</span>'
-                        : '<span class="badge bg-success">Closed</span>';
+                        ? '<span class="badge bg-warning text-dark"><i class="fas fa-folder-open me-1"></i>Open</span>'
+                        : '<span class="badge bg-success"><i class="fas fa-check-circle me-1"></i>Closed</span>';
                     return $badge;
                 })
                 ->addColumn('opsi', function ($row) {
@@ -58,19 +78,20 @@ class KasusController extends Controller
                         </button>
                         <ul class="dropdown-menu" aria-labelledby="dropdownMenu' . $row->id_kasus . '">
                             <li><a class="dropdown-item" href="' . route('kasus.show', $row->id_kasus) . '">
-                                <i class="fas fa-eye me-2"></i>Lihat
+                                <i class="fas fa-eye me-2"></i>Lihat Detail
                             </a></li>
                             <li><a class="dropdown-item edit-btn" href="javascript:void(0)" data-id="' . $row->id_kasus . '">
                                 <i class="fas fa-edit me-2"></i>Edit
                             </a></li>
+                            <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item delete-btn text-danger" href="javascript:void(0)" data-id="' . $row->id_kasus . '">
-                                <i class="fas fa-trash me-2"></i>Delete
+                                <i class="fas fa-trash me-2"></i>Hapus
                             </a></li>
                         </ul>
                     </div>';
                     return $btn;
                 })
-                ->rawColumns(['status_badge', 'opsi'])
+                ->rawColumns(['status_badge', 'impact_badge', 'detection_badge', 'opsi', 'deskripsi_short'])
                 ->make(true);
         }
     }
@@ -101,17 +122,20 @@ class KasusController extends Controller
     public function edit($id)
     {
         try {
-            $kasus = Kasus::findOrFail($id);
+            $kasus = Kasus::with('korban')->findOrFail($id);
 
             return response()->json([
                 'success' => true,
                 'data' => [
                     'id_kasus' => $kasus->id_kasus,
                     'id_site' => $kasus->id_site,
+                    'site_url' => $kasus->korban->site_url ?? '-',
                     'jenis_kasus' => $kasus->jenis_kasus,
                     'tanggal_kejadian' => $kasus->tanggal_kejadian->format('Y-m-d'),
                     'deskripsi_kasus' => $kasus->deskripsi_kasus,
                     'status_kasus' => $kasus->status_kasus,
+                    'detection_source' => $kasus->detection_source ?? 'Manual',
+                    'impact_level' => $kasus->impact_level ?? 'Low',
                 ]
             ]);
         } catch (\Exception $e) {

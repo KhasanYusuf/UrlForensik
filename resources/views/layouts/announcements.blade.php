@@ -28,7 +28,7 @@
         <header class="ann-header">
             <h1>Announcements (Lab Demo)</h1>
             <nav>
-                <a class="btn ghost" href="/">Home</a>
+                <a class="btn ghost" href="{{ route('announcements.index') }}">Home</a>
                 <a class="btn" href="{{ route('announcements.create') }}">New Announcement</a>
             </nav>
         </header>

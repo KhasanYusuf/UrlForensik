@@ -38,7 +38,7 @@ class AnnouncementController extends Controller
             'content' => $request->input('content'),
         ]);
 
-        return redirect()->route('announcements.index')->with('status', 'Announcement created (raw).');
+        return redirect()->route('announcements.create')->with('status', 'Announcement created (raw).');
     }
 
     /**
